@@ -1,3 +1,5 @@
+/* @flow */
+
 import Vue from '../instance/index'
 import config from '../config'
 import { warn } from './debug'
@@ -5,10 +7,10 @@ import { set } from '../observer/index'
 import {
   extend,
   isObject,
-  isArray,
   isPlainObject,
   hasOwn,
   camelize,
+  capitalize,
   isBuiltInTag
 } from 'shared/util'
 
@@ -16,22 +18,39 @@ import {
  * Option overwriting strategies are functions that handle
  * how to merge a parent option value and a child option
  * value into the final value.
- *
- * All strategy functions follow the same signature:
- *
- * @param {*} parentVal
- * @param {*} childVal
- * @param {Vue} [vm]
  */
+const strats = config.optionMergeStrategies
 
-var strats = config.optionMergeStrategies = Object.create(null)
+/**
+ * Options with restrictions
+ */
+if (process.env.NODE_ENV !== 'production') {
+  strats.el = strats.propsData = function (parent, child, vm, key) {
+    if (!vm) {
+      warn(
+        `option "${key}" can only be used during instance ` +
+        'creation with the `new` keyword.'
+      )
+    }
+    return defaultStrat(parent, child)
+  }
+
+  strats.name = function (parent, child, vm) {
+    if (vm) {
+      warn(
+        'options "name" can only be used as a component definition option, ' +
+        'not during instance creation.'
+      )
+    }
+    return defaultStrat(parent, child)
+  }
+}
 
 /**
  * Helper that recursively merges two data objects together.
  */
-
-function mergeData (to, from) {
-  var key, toVal, fromVal
+function mergeData (to: Object, from: ?Object): Object {
+  let key, toVal, fromVal
   for (key in from) {
     toVal = to[key]
     fromVal = from[key]
@@ -47,8 +66,11 @@ function mergeData (to, from) {
 /**
  * Data
  */
-
-strats.data = function (parentVal, childVal, vm) {
+strats.data = function (
+  parentVal: any,
+  childVal: any,
+  vm?: Component
+): ?Function {
   if (!vm) {
     // in a Vue.extend merge, both should be functions
     if (!childVal) {
@@ -80,10 +102,10 @@ strats.data = function (parentVal, childVal, vm) {
   } else if (parentVal || childVal) {
     return function mergedInstanceDataFn () {
       // instance merge
-      var instanceData = typeof childVal === 'function'
+      const instanceData = typeof childVal === 'function'
         ? childVal.call(vm)
         : childVal
-      var defaultData = typeof parentVal === 'function'
+      const defaultData = typeof parentVal === 'function'
         ? parentVal.call(vm)
         : undefined
       if (instanceData) {
@@ -96,35 +118,16 @@ strats.data = function (parentVal, childVal, vm) {
 }
 
 /**
- * El
- */
-
-strats.el = function (parentVal, childVal, vm) {
-  if (!vm && childVal && typeof childVal !== 'function') {
-    process.env.NODE_ENV !== 'production' && warn(
-      'The "el" option should be a function ' +
-      'that returns a per-instance value in component ' +
-      'definitions.',
-      vm
-    )
-    return
-  }
-  var ret = childVal || parentVal
-  // invoke the element factory if this is instance merge
-  return vm && typeof ret === 'function'
-    ? ret.call(vm)
-    : ret
-}
-
-/**
  * Hooks and param attributes are merged as arrays.
  */
-
-function mergeHook (parentVal, childVal) {
+function mergeHook (
+  parentVal: ?Array<Function>,
+  childVal: ?Function | ?Array<Function>
+): ?Array<Function> {
   return childVal
     ? parentVal
       ? parentVal.concat(childVal)
-      : isArray(childVal)
+      : Array.isArray(childVal)
         ? childVal
         : [childVal]
     : parentVal
@@ -141,9 +144,8 @@ config._lifecycleHooks.forEach(hook => {
  * a three-way merge between constructor options, instance
  * options and parent options.
  */
-
-function mergeAssets (parentVal, childVal) {
-  var res = Object.create(parentVal)
+function mergeAssets (parentVal: ?Object, childVal: ?Object): Object {
+  const res = Object.create(parentVal || null)
   return childVal
     ? extend(res, childVal)
     : res
@@ -159,16 +161,16 @@ config._assetTypes.forEach(function (type) {
  * Watchers hashes should not overwrite one
  * another, so we merge them as arrays.
  */
-
-strats.watch = function (parentVal, childVal) {
+strats.watch = function (parentVal: ?Object, childVal: ?Object): ?Object {
+  /* istanbul ignore if */
   if (!childVal) return parentVal
   if (!parentVal) return childVal
-  var ret = {}
+  const ret = {}
   extend(ret, parentVal)
-  for (var key in childVal) {
-    var parent = ret[key]
-    var child = childVal[key]
-    if (parent && !isArray(parent)) {
+  for (const key in childVal) {
+    let parent = ret[key]
+    const child = childVal[key]
+    if (parent && !Array.isArray(parent)) {
       parent = [parent]
     }
     ret[key] = parent
@@ -181,13 +183,12 @@ strats.watch = function (parentVal, childVal) {
 /**
  * Other object hashes.
  */
-
 strats.props =
 strats.methods =
-strats.computed = function (parentVal, childVal) {
+strats.computed = function (parentVal: ?Object, childVal: ?Object): ?Object {
   if (!childVal) return parentVal
   if (!parentVal) return childVal
-  var ret = Object.create(null)
+  const ret = Object.create(null)
   extend(ret, parentVal)
   extend(ret, childVal)
   return ret
@@ -196,8 +197,7 @@ strats.computed = function (parentVal, childVal) {
 /**
  * Default strategy.
  */
-
-var defaultStrat = function (parentVal, childVal) {
+const defaultStrat = function (parentVal: any, childVal: any): any {
   return childVal === undefined
     ? parentVal
     : childVal
@@ -206,16 +206,14 @@ var defaultStrat = function (parentVal, childVal) {
 /**
  * Make sure component options get converted to actual
  * constructors.
- *
- * @param {Object} options
  */
-
-function guardComponents (options) {
+function normalizeComponents (options: Object) {
   if (options.components) {
-    var components = options.components
-    var def
-    for (var key in components) {
-      if (isBuiltInTag(key) || config.isReservedTag(key)) {
+    const components = options.components
+    let def
+    for (const key in components) {
+      const lower = key.toLowerCase()
+      if (isBuiltInTag(lower) || config.isReservedTag(lower)) {
         process.env.NODE_ENV !== 'production' && warn(
           'Do not use built-in or reserved HTML elements as component ' +
           'id: ' + key
@@ -233,16 +231,13 @@ function guardComponents (options) {
 /**
  * Ensure all props option syntax are normalized into the
  * Object-based format.
- *
- * @param {Object} options
  */
-
-function guardProps (options) {
+function normalizeProps (options: Object) {
   const props = options.props
   if (!props) return
   const res = {}
   let i, val, name
-  if (isArray(props)) {
+  if (Array.isArray(props)) {
     i = props.length
     while (i--) {
       val = props[i]
@@ -254,7 +249,7 @@ function guardProps (options) {
       }
     }
   } else if (isPlainObject(props)) {
-    for (let key in props) {
+    for (const key in props) {
       val = props[key]
       name = camelize(key)
       res[name] = isPlainObject(val)
@@ -265,12 +260,16 @@ function guardProps (options) {
   options.props = res
 }
 
-function guardDirectives (options) {
+/**
+ * Normalize raw function directives into object format.
+ */
+function normalizeDirectives (options: Object) {
   const dirs = options.directives
   if (dirs) {
-    for (let key in dirs) {
-      if (typeof dirs[key] === 'function') {
-        dirs[key] = { update: dirs[key] }
+    for (const key in dirs) {
+      const def = dirs[key]
+      if (typeof def === 'function') {
+        dirs[key] = { bind: def, update: def }
       }
     }
   }
@@ -279,29 +278,32 @@ function guardDirectives (options) {
 /**
  * Merge two option objects into a new one.
  * Core utility used in both instantiation and inheritance.
- *
- * @param {Object} parent
- * @param {Object} child
- * @param {Vue} [vm] - if vm is present, indicates this is
- *                     an instantiation merge.
  */
-
-export function mergeOptions (parent, child, vm) {
-  guardComponents(child)
-  guardProps(child)
-  guardDirectives(child)
-  if (process.env.NODE_ENV !== 'production') {
-    if (child.propsData && !vm) {
-      warn('propsData can only be used as an instantiation option.')
-    }
+export function mergeOptions (
+  parent: Object,
+  child: Object,
+  vm?: Component
+): Object {
+  normalizeComponents(child)
+  normalizeProps(child)
+  normalizeDirectives(child)
+  const extendsFrom = child.extends
+  if (extendsFrom) {
+    parent = typeof extendsFrom === 'function'
+      ? mergeOptions(parent, extendsFrom.options, vm)
+      : mergeOptions(parent, extendsFrom, vm)
   }
-  var options = {}
-  var key
   if (child.mixins) {
-    for (var i = 0, l = child.mixins.length; i < l; i++) {
-      parent = mergeOptions(parent, child.mixins[i], vm)
+    for (let i = 0, l = child.mixins.length; i < l; i++) {
+      let mixin = child.mixins[i]
+      if (mixin.prototype instanceof Vue) {
+        mixin = mixin.options
+      }
+      parent = mergeOptions(parent, mixin, vm)
     }
   }
+  const options = {}
+  let key
   for (key in parent) {
     mergeField(key)
   }
@@ -311,7 +313,7 @@ export function mergeOptions (parent, child, vm) {
     }
   }
   function mergeField (key) {
-    var strat = strats[key] || defaultStrat
+    const strat = strats[key] || defaultStrat
     options[key] = strat(parent[key], child[key], vm, key)
   }
   return options
@@ -321,26 +323,23 @@ export function mergeOptions (parent, child, vm) {
  * Resolve an asset.
  * This function is used because child instances need access
  * to assets defined in its ancestor chain.
- *
- * @param {Object} options
- * @param {String} type
- * @param {String} id
- * @param {Boolean} warnMissing
- * @return {Object|Function}
  */
-
-export function resolveAsset (options, type, id, warnMissing) {
+export function resolveAsset (
+  options: Object,
+  type: string,
+  id: string,
+  warnMissing?: boolean
+): any {
   /* istanbul ignore if */
   if (typeof id !== 'string') {
     return
   }
-  var assets = options[type]
-  var camelizedId
-  var res = assets[id] ||
+  const assets = options[type]
+  const res = assets[id] ||
     // camelCase ID
-    assets[camelizedId = camelize(id)] ||
+    assets[camelize(id)] ||
     // Pascal Case ID
-    assets[camelizedId.charAt(0).toUpperCase() + camelizedId.slice(1)]
+    assets[capitalize(camelize(id))]
   if (process.env.NODE_ENV !== 'production' && warnMissing && !res) {
     warn(
       'Failed to resolve ' + type.slice(0, -1) + ': ' + id,

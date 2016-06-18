@@ -1,3 +1,5 @@
+/* @flow */
+
 import { inBrowser } from 'core/util/env'
 import { makeMap } from 'shared/util'
 
@@ -9,7 +11,7 @@ export const namespaceMap = {
 export const isReservedTag = makeMap(
   'html,base,head,link,meta,style,title,' +
   'address,article,footer,header,h1,h2,h3,h4,h5,h6,hgroup,nav,section,' +
-  'div,dd,dl,dt,figcaption,figure,hr,li,main,ol,p,pre,ul,' +
+  'div,dd,dl,dt,figcaption,figure,hr,img,li,main,ol,p,pre,ul,' +
   'a,b,abbr,bdi,bdo,br,cite,code,data,dfn,em,i,kbd,mark,q,rp,rt,rtc,ruby,' +
   's,samp,small,span,strong,sub,sup,time,u,var,wbr,area,audio,map,track,video,' +
   'embed,object,param,source,canvas,script,noscript,del,ins,' +
@@ -51,7 +53,7 @@ const isSVG = makeMap(
   true
 )
 
-export function getTagNamespace (tag) {
+export function getTagNamespace (tag: string): ?string {
   if (isSVG(tag)) {
     return 'svg'
   }
@@ -63,11 +65,13 @@ export function getTagNamespace (tag) {
 }
 
 const unknownElementCache = Object.create(null)
-export function isUnknownElement (tag) {
+export function isUnknownElement (tag: string): boolean {
+  /* istanbul ignore if */
   if (!inBrowser) {
     return true
   }
   tag = tag.toLowerCase()
+  /* istanbul ignore if */
   if (unknownElementCache[tag] != null) {
     return unknownElementCache[tag]
   }
@@ -79,11 +83,6 @@ export function isUnknownElement (tag) {
       el.constructor === window.HTMLElement
     ))
   } else {
-    return (unknownElementCache[tag] = (
-      /HTMLUnknownElement/.test(el.toString()) &&
-      // Chrome returns unknown for several HTML5 elements.
-      // https://code.google.com/p/chromium/issues/detail?id=540526
-      !/^(data|time|rtc|rb)$/.test(tag)
-    ))
+    return (unknownElementCache[tag] = /HTMLUnknownElement/.test(el.toString()))
   }
 }

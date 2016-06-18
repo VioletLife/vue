@@ -1,6 +1,15 @@
-import { isBooleanAttr, isEnumeratedAttr, isXlink, xlinkNS } from 'web/util/index'
+/* @flow */
 
-function updateAttrs (oldVnode, vnode) {
+import {
+  isBooleanAttr,
+  isEnumeratedAttr,
+  isXlink,
+  xlinkNS,
+  getXlinkProp,
+  isFalsyAttrValue
+} from 'web/util/index'
+
+function updateAttrs (oldVnode: VNodeWithData, vnode: VNodeWithData) {
   if (!oldVnode.data.attrs && !vnode.data.attrs) {
     return
   }
@@ -19,36 +28,45 @@ function updateAttrs (oldVnode, vnode) {
   for (key in oldAttrs) {
     if (attrs[key] == null) {
       if (isXlink(key)) {
-        elm.removeAttributeNS(xlinkNS, key)
-      } else {
+        elm.removeAttributeNS(xlinkNS, getXlinkProp(key))
+      } else if (!isEnumeratedAttr(key)) {
         elm.removeAttribute(key)
       }
     }
   }
 }
 
-function setAttr (el, key, value) {
+function setAttr (el: Element, key: string, value: any) {
   if (isBooleanAttr(key)) {
-    if (value == null) {
+    // set attribute for blank value
+    // e.g. <option disabled>Select one</option>
+    if (isFalsyAttrValue(value)) {
       el.removeAttribute(key)
     } else {
       el.setAttribute(key, key)
     }
   } else if (isEnumeratedAttr(key)) {
-    el.setAttribute(key, value == null ? 'false' : 'true')
+    el.setAttribute(key, isFalsyAttrValue(value) || value === 'false' ? 'false' : 'true')
   } else if (isXlink(key)) {
-    el.setAttributeNS(xlinkNS, key, value)
+    if (isFalsyAttrValue(value)) {
+      el.removeAttributeNS(xlinkNS, getXlinkProp(key))
+    } else {
+      el.setAttributeNS(xlinkNS, key, value)
+    }
   } else {
-    el.setAttribute(key, value)
+    if (isFalsyAttrValue(value)) {
+      el.removeAttribute(key)
+    } else {
+      el.setAttribute(key, value)
+    }
   }
 }
 
 export default {
-  create: function (_, vnode) {
+  create: function (_: any, vnode: VNodeWithData) {
     const attrs = vnode.data.staticAttrs
     if (attrs) {
-      for (let key in attrs) {
-        if (!vnode.elm) debugger
+      for (const key in attrs) {
         setAttr(vnode.elm, key, attrs[key])
       }
     }

@@ -1,49 +1,57 @@
+/* @flow */
+
 import { decodeHTML } from 'entities'
 import { parseHTML } from './html-parser'
 import { parseText } from './text-parser'
-import { hyphenate, cached } from 'shared/util'
+import { hyphenate, cached, no } from 'shared/util'
 import {
+  pluckModuleFunction,
   getAndRemoveAttr,
   addProp,
   addAttr,
   addStaticAttr,
   addHandler,
   addDirective,
-  getBindingAttr
+  getBindingAttr,
+  baseWarn
 } from '../helpers'
 
-const dirRE = /^v-|^@|^:/
+export const dirRE = /^v-|^@|^:/
+export const forAliasRE = /(.*)\s+(?:in|of)\s+(.*)/
+export const forIteratorRE = /\(([^,]*),([^,]*)(?:,([^,]*))?\)/
 const bindRE = /^:|^v-bind:/
 const onRE = /^@|^v-on:/
 const argRE = /:(.*)$/
 const modifierRE = /\.[^\.]+/g
-const forAliasRE = /(.*)\s+(?:in|of)\s+(.*)/
-const forIteratorRE = /\((.*),(.*)\)/
 const camelRE = /[a-z\d][A-Z]/
 
 const decodeHTMLCached = cached(decodeHTML)
 
-// make warning customizable depending on environment.
+// configurable state
 let warn
-const baseWarn = msg => console.error(`[Vue parser]: ${msg}`)
-
-// platform-injected util functions
 let platformGetTagNamespace
 let platformMustUseProp
+let preTransforms
+let transforms
+let postTransforms
+let delimiters
 
 /**
  * Convert HTML string to AST.
- *
- * @param {String} template
- * @param {Object} options
- * @return {Object}
  */
-
-export function parse (template, options) {
+export function parse (
+  template: string,
+  options: CompilerOptions
+): ASTElement | void {
   warn = options.warn || baseWarn
-  platformGetTagNamespace = options.getTagNamespace || (() => null)
-  platformMustUseProp = options.mustUseProp || (() => false)
+  platformGetTagNamespace = options.getTagNamespace || no
+  platformMustUseProp = options.mustUseProp || no
+  preTransforms = pluckModuleFunction(options.modules, 'preTransformNode')
+  transforms = pluckModuleFunction(options.modules, 'transformNode')
+  postTransforms = pluckModuleFunction(options.modules, 'postTransformNode')
+  delimiters = options.delimiters
   const stack = []
+  const preserveWhitespace = options.preserveWhitespace !== false
   let root
   let currentParent
   let inPre = false
@@ -62,12 +70,27 @@ export function parse (template, options) {
       }
 
       tag = tag.toLowerCase()
-      const element = {
+
+      // check namespace.
+      // inherit parent ns if there is one
+      const ns = (currentParent && currentParent.ns) || platformGetTagNamespace(tag)
+
+      // handle IE svg bug
+      /* istanbul ignore if */
+      if (options.isIE && ns === 'svg') {
+        attrs = guardIESVGBug(attrs)
+      }
+
+      const element: ASTElement = {
+        type: 1,
         tag,
         attrsList: attrs,
         attrsMap: makeAttrsMap(attrs),
         parent: currentParent,
         children: []
+      }
+      if (ns) {
+        element.ns = ns
       }
 
       if (isForbiddenTag(element)) {
@@ -79,12 +102,9 @@ export function parse (template, options) {
         )
       }
 
-      // check namespace.
-      // inherit parent ns if there is one
-      let ns
-      if ((ns = currentParent && currentParent.ns) ||
-          (ns = platformGetTagNamespace(tag))) {
-        element.ns = ns
+      // apply pre-transforms
+      for (let i = 0; i < preTransforms.length; i++) {
+        preTransforms[i](element, options)
       }
 
       if (!inPre) {
@@ -99,21 +119,39 @@ export function parse (template, options) {
         processFor(element)
         processIf(element)
         processOnce(element)
+
         // determine whether this is a plain element after
-        // removing if/for/once attributes
-        element.plain = !attrs.length
-        processRender(element)
+        // removing structural attributes
+        element.plain = !element.key && !attrs.length
+
+        processKey(element)
+        processRef(element)
         processSlot(element)
         processComponent(element)
-        processClassBinding(element)
-        processStyleBinding(element)
-        processTransition(element)
+        for (let i = 0; i < transforms.length; i++) {
+          transforms[i](element, options)
+        }
         processAttrs(element)
       }
 
       // tree management
       if (!root) {
         root = element
+        // check root element constraints
+        if (process.env.NODE_ENV !== 'production') {
+          if (tag === 'slot' || tag === 'template') {
+            warn(
+              `Cannot use <${tag}> as component root element because it may ` +
+              'contain multiple nodes:\n' + template
+            )
+          }
+          if (element.attrsMap.hasOwnProperty('v-for')) {
+            warn(
+              'Cannot use v-for on stateful component root element because ' +
+              'it renders multiple elements:\n' + template
+            )
+          }
+        }
       } else if (process.env.NODE_ENV !== 'production' && !stack.length && !warned) {
         warned = true
         warn(
@@ -132,13 +170,19 @@ export function parse (template, options) {
         currentParent = element
         stack.push(element)
       }
+      // apply post-transforms
+      for (let i = 0; i < postTransforms.length; i++) {
+        postTransforms[i](element, options)
+      }
     },
 
-    end (tag) {
+    end () {
       // remove trailing whitespace
       const element = stack[stack.length - 1]
       const lastNode = element.children[element.children.length - 1]
-      if (lastNode && lastNode.text === ' ') element.children.pop()
+      if (lastNode && lastNode.type === 3 && lastNode.text === ' ') {
+        element.children.pop()
+      }
       // pop stack
       stack.length -= 1
       currentParent = stack[stack.length - 1]
@@ -148,7 +192,7 @@ export function parse (template, options) {
       }
     },
 
-    chars (text) {
+    chars (text: string) {
       if (!currentParent) {
         if (process.env.NODE_ENV !== 'production' && !warned) {
           warned = true
@@ -161,15 +205,20 @@ export function parse (template, options) {
       text = currentParent.tag === 'pre' || text.trim()
         ? decodeHTMLCached(text)
         // only preserve whitespace if its not right after a starting tag
-        : options.preserveWhitespace && currentParent.children.length
-          ? ' '
-          : null
+        : preserveWhitespace && currentParent.children.length ? ' ' : ''
       if (text) {
         let expression
-        if (!inPre && text !== ' ' && (expression = parseText(text))) {
-          currentParent.children.push({ expression })
+        if (!inPre && text !== ' ' && (expression = parseText(text, delimiters))) {
+          currentParent.children.push({
+            type: 2,
+            expression,
+            text
+          })
         } else {
-          currentParent.children.push({ text })
+          currentParent.children.push({
+            type: 3,
+            text
+          })
         }
       }
     }
@@ -186,12 +235,37 @@ function processPre (el) {
 function processRawAttrs (el) {
   const l = el.attrsList.length
   if (l) {
-    el.attrs = new Array(l)
+    const attrs = el.staticAttrs = new Array(l)
     for (let i = 0; i < l; i++) {
-      el.attrs[i] = {
+      attrs[i] = {
         name: el.attrsList[i].name,
         value: JSON.stringify(el.attrsList[i].value)
       }
+    }
+  } else if (!el.pre) {
+    // non root node in pre blocks with no attributes
+    el.plain = true
+  }
+}
+
+function processKey (el) {
+  const exp = getBindingAttr(el, 'key')
+  if (exp) {
+    el.key = exp
+  }
+}
+
+function processRef (el) {
+  const ref = getBindingAttr(el, 'ref')
+  if (ref) {
+    el.ref = ref
+    let parent = el
+    while (parent) {
+      if (parent.for !== undefined) {
+        el.refInFor = true
+        break
+      }
+      parent = parent.parent
     }
   }
 }
@@ -210,21 +284,19 @@ function processFor (el) {
     const alias = inMatch[1].trim()
     const iteratorMatch = alias.match(forIteratorRE)
     if (iteratorMatch) {
-      el.iterator = iteratorMatch[1].trim()
-      el.alias = iteratorMatch[2].trim()
+      el.alias = iteratorMatch[1].trim()
+      el.iterator1 = iteratorMatch[2].trim()
+      if (iteratorMatch[3]) {
+        el.iterator2 = iteratorMatch[3].trim()
+      }
     } else {
       el.alias = alias
-    }
-    if ((exp = getAndRemoveAttr(el, 'track-by'))) {
-      el.key = exp === '$index'
-        ? exp
-        : el.alias + '["' + exp + '"]'
     }
   }
 }
 
 function processIf (el) {
-  let exp = getAndRemoveAttr(el, 'v-if')
+  const exp = getAndRemoveAttr(el, 'v-if')
   if (exp) {
     el.if = exp
   }
@@ -235,22 +307,11 @@ function processIf (el) {
 
 function processElse (el, parent) {
   const prev = findPrevElement(parent.children)
-  if (prev && (prev.if || prev.attrsMap['v-show'])) {
-    if (prev.if) {
-      // v-if
-      prev.elseBlock = el
-    } else {
-      // v-show: simply add a v-show with reversed value
-      addDirective(el, 'show', `!(${prev.attrsMap['v-show']})`)
-      // also copy its transition
-      el.transition = prev.transition
-      // als set show to true
-      el.show = true
-      parent.children.push(el)
-    }
+  if (prev && prev.if) {
+    prev.elseBlock = el
   } else if (process.env.NODE_ENV !== 'production') {
     warn(
-      `v-else used on element <${el.tag}> without corresponding v-if/v-show.`
+      `v-else used on element <${el.tag}> without corresponding v-if.`
     )
   }
 }
@@ -259,22 +320,6 @@ function processOnce (el) {
   const once = getAndRemoveAttr(el, 'v-once')
   if (once != null) {
     el.once = true
-  }
-}
-
-function processRender (el) {
-  if (el.tag === 'render') {
-    el.render = true
-    el.renderMethod = el.attrsMap.method
-    el.renderArgs = el.attrsMap[':args'] || el.attrsMap['v-bind:args']
-    if (process.env.NODE_ENV !== 'production') {
-      if (!el.renderMethod) {
-        warn('method attribute is required on <render>.')
-      }
-      if (el.attrsMap.args) {
-        warn('<render> args should use a dynamic binding, e.g. `:args="..."`.')
-      }
-    }
   }
 }
 
@@ -290,35 +335,15 @@ function processSlot (el) {
 }
 
 function processComponent (el) {
-  if (el.tag === 'component') {
-    el.component = getBindingAttr(el, 'is')
+  let binding
+  if ((binding = getBindingAttr(el, 'is'))) {
+    el.component = binding
   }
-}
-
-function processClassBinding (el) {
-  const staticClass = getAndRemoveAttr(el, 'class')
-  el.staticClass = parseText(staticClass) || JSON.stringify(staticClass)
-  const classBinding = getBindingAttr(el, 'class', false /* getStatic */)
-  if (classBinding) {
-    el.classBinding = classBinding
+  if (getAndRemoveAttr(el, 'keep-alive') != null) {
+    el.keepAlive = true
   }
-}
-
-function processStyleBinding (el) {
-  const styleBinding = getBindingAttr(el, 'style', false /* getStatic */)
-  if (styleBinding) {
-    el.styleBinding = styleBinding
-  }
-}
-
-function processTransition (el) {
-  let transition = getBindingAttr(el, 'transition')
-  if (transition === '""') {
-    transition = true
-  }
-  if (transition) {
-    el.transition = transition
-    el.transitionOnAppear = getBindingAttr(el, 'transition-on-appear') != null
+  if (getAndRemoveAttr(el, 'inline-template') != null) {
+    el.inlineTemplate = true
   }
 }
 
@@ -347,27 +372,30 @@ function processAttrs (el) {
       } else { // normal directives
         name = name.replace(dirRE, '')
         // parse arg
-        if ((arg = name.match(argRE)) && (arg = arg[1])) {
+        const argMatch = name.match(argRE)
+        if (argMatch && (arg = argMatch[1])) {
           name = name.slice(0, -(arg.length + 1))
         }
         addDirective(el, name, value, arg, modifiers)
       }
     } else {
       // literal attribute
-      let expression = parseText(value)
-      if (expression) {
-        warn(
-          'Interpolation inside attributes has been deprecated. ' +
-          'Use v-bind or the colon shorthand instead.'
-        )
-      } else {
-        addStaticAttr(el, name, JSON.stringify(value))
+      if (process.env.NODE_ENV !== 'production') {
+        const expression = parseText(value, delimiters)
+        if (expression) {
+          warn(
+            `${name}="${value}": ` +
+            'Interpolation inside attributes has been deprecated. ' +
+            'Use v-bind or the colon shorthand instead.'
+          )
+        }
       }
+      addStaticAttr(el, name, JSON.stringify(value))
     }
   }
 }
 
-function parseModifiers (name) {
+function parseModifiers (name: string): Object | void {
   const match = name.match(modifierRE)
   if (match) {
     const ret = {}
@@ -376,7 +404,7 @@ function parseModifiers (name) {
   }
 }
 
-function makeAttrsMap (attrs) {
+function makeAttrsMap (attrs: Array<Object>): Object {
   const map = {}
   for (let i = 0, l = attrs.length; i < l; i++) {
     if (process.env.NODE_ENV !== 'production' && map[attrs[i].name]) {
@@ -387,14 +415,14 @@ function makeAttrsMap (attrs) {
   return map
 }
 
-function findPrevElement (children) {
+function findPrevElement (children: Array<any>): ASTElement | void {
   let i = children.length
   while (i--) {
     if (children[i].tag) return children[i]
   }
 }
 
-function isForbiddenTag (el) {
+function isForbiddenTag (el): boolean {
   return (
     el.tag === 'style' ||
     (el.tag === 'script' && (
@@ -402,4 +430,20 @@ function isForbiddenTag (el) {
       el.attrsMap.type === 'text/javascript'
     ))
   )
+}
+
+const ieNSBug = /^xmlns:NS\d+/
+const ieNSPrefix = /^NS\d+:/
+
+/* istanbul ignore next */
+function guardIESVGBug (attrs) {
+  const res = []
+  for (let i = 0; i < attrs.length; i++) {
+    const attr = attrs[i]
+    if (!ieNSBug.test(attr.name)) {
+      attr.name = attr.name.replace(ieNSPrefix, '')
+      res.push(attr)
+    }
+  }
+  return res
 }

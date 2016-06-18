@@ -1,10 +1,9 @@
-var path = require('path')
 var base = require('./karma.base.config.js')
 
 module.exports = function (config) {
   var options = Object.assign(base, {
     browsers: ['PhantomJS'],
-    reporters: ['progress', 'coverage'],
+    reporters: ['mocha', 'coverage'],
     coverageReporter: {
       reporters: [
         { type: 'lcov', dir: '../coverage', subdir: '.' },
@@ -14,14 +13,16 @@ module.exports = function (config) {
     singleRun: true
   })
 
-  // add coverage loader
-  options.webpack.module.preLoaders = [
-    {
-      test: /\.js$/,
-      include: path.resolve(__dirname, '../src'),
-      loader: 'isparta'
-    }
-  ]
+  // add babel-plugin-coverage for code intrumentation
+  options.webpack.babel = {
+    plugins: [['coverage', {
+      ignore: [
+        'test/',
+        'src/compiler/parser/html-parser.js',
+        'src/core/instance/proxy.js'
+      ]
+    }]]
+  }
 
   config.set(options)
 }

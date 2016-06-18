@@ -1,5 +1,6 @@
-/* global MutationObserver */
+/* @flow */
 
+/* global MutationObserver */
 // can we use __proto__?
 export const hasProto = '__proto__' in {}
 
@@ -12,9 +13,19 @@ export const inBrowser =
 export const devtools = inBrowser && window.__VUE_DEVTOOLS_GLOBAL_HOOK__
 
 // UA sniffing for working around browser-specific quirks
-const UA = inBrowser && window.navigator.userAgent.toLowerCase()
+export const UA = inBrowser && window.navigator.userAgent.toLowerCase()
 const isIos = UA && /(iphone|ipad|ipod|ios)/i.test(UA)
-const isWechat = UA && UA.indexOf('micromessenger') > 0
+const iosVersionMatch = UA && isIos && UA.match(/os ([\d_]+)/)
+const iosVersion = iosVersionMatch && iosVersionMatch[1].split('_')
+
+// MutationObserver is unreliable in iOS 9.3 UIWebView
+// detecting it by checking presence of IndexedDB
+// ref #3027
+const hasMutationObserverBug =
+  iosVersion &&
+  Number(iosVersion[0]) >= 9 &&
+  Number(iosVersion[1]) >= 3 &&
+  !window.indexedDB
 
 /**
  * Defer a task to execute it asynchronously. Ideally this
@@ -25,31 +36,30 @@ const isWechat = UA && UA.indexOf('micromessenger') > 0
  * @param {Function} cb
  * @param {Object} ctx
  */
-
 export const nextTick = (function () {
-  var callbacks = []
-  var pending = false
-  var timerFunc
+  let callbacks = []
+  let pending = false
+  let timerFunc
   function nextTickHandler () {
     pending = false
-    var copies = callbacks.slice(0)
+    const copies = callbacks.slice(0)
     callbacks = []
-    for (var i = 0; i < copies.length; i++) {
+    for (let i = 0; i < copies.length; i++) {
       copies[i]()
     }
   }
 
-  /* istanbul ignore if */
-  if (typeof MutationObserver !== 'undefined' && !(isWechat && isIos)) {
-    var counter = 1
-    var observer = new MutationObserver(nextTickHandler)
-    var textNode = document.createTextNode(counter)
+  /* istanbul ignore else */
+  if (typeof MutationObserver !== 'undefined' && !hasMutationObserverBug) {
+    let counter = 1
+    const observer = new MutationObserver(nextTickHandler)
+    const textNode = document.createTextNode(String(counter))
     observer.observe(textNode, {
       characterData: true
     })
     timerFunc = function () {
       counter = (counter + 1) % 2
-      textNode.data = counter
+      textNode.data = String(counter)
     }
   } else {
     // webpack attempts to inject a shim for setImmediate
@@ -60,8 +70,8 @@ export const nextTick = (function () {
       : typeof global !== 'undefined' ? global : {}
     timerFunc = context.setImmediate || setTimeout
   }
-  return function (cb, ctx) {
-    var func = ctx
+  return function (cb: Function, ctx?: Object) {
+    const func = ctx
       ? function () { cb.call(ctx) }
       : cb
     callbacks.push(func)
@@ -73,22 +83,25 @@ export const nextTick = (function () {
 
 let _Set
 /* istanbul ignore if */
-if (typeof Set !== 'undefined' && Set.toString().match(/native code/)) {
+if (typeof Set !== 'undefined' && /native code/.test(Set.toString())) {
   // use native Set when available.
   _Set = Set
 } else {
   // a non-standard Set polyfill that only works with primitive keys.
-  _Set = function () {
-    this.set = Object.create(null)
-  }
-  _Set.prototype.has = function (key) {
-    return this.set[key] !== undefined
-  }
-  _Set.prototype.add = function (key) {
-    this.set[key] = 1
-  }
-  _Set.prototype.clear = function () {
-    this.set = Object.create(null)
+  _Set = class Set {
+    set: Object;
+    constructor () {
+      this.set = Object.create(null)
+    }
+    has (key: string | number) {
+      return this.set[key] !== undefined
+    }
+    add (key: string | number) {
+      this.set[key] = 1
+    }
+    clear () {
+      this.set = Object.create(null)
+    }
   }
 }
 

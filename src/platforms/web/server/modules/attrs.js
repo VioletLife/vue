@@ -1,37 +1,43 @@
-import { isBooleanAttr, isEnumeratedAttr, propsToAttrMap } from 'web/util/index'
+/* @flow */
 
-export default function renderAttrs (node) {
-  if (node.data.attrs || node.data.props || node.data.staticAttrs) {
-    return (
-      serialize(node.data.staticAttrs) +
-      serialize(node.data.attrs) +
-      serialize(node.data.props, true)
-    )
+import {
+  isBooleanAttr,
+  isEnumeratedAttr,
+  isFalsyAttrValue
+} from 'web/util/attrs'
+
+export default function renderAttrs (node: VNodeWithData): string {
+  let res = ''
+  if (node.data.staticAttrs) {
+    res += render(node.data.staticAttrs)
   }
+  if (node.data.attrs) {
+    res += render(node.data.attrs)
+  }
+  return res
 }
 
-function serialize (attrs, asProps) {
+function render (attrs: { [key: string]: any }): string {
   let res = ''
-  if (!attrs) {
-    return res
-  }
-  for (let key in attrs) {
+  for (const key in attrs) {
     if (key === 'style') {
       // leave it to the style module
       continue
     }
-    if (asProps) {
-      key = propsToAttrMap[key] || key.toLowerCase()
-    }
-    if (attrs[key] != null) {
-      if (isBooleanAttr(key)) {
-        res += ` ${key}="${key}"`
-      } else if (isEnumeratedAttr(key)) {
-        res += ` ${key}="true"`
-      } else {
-        res += ` ${key}="${attrs[key]}"`
-      }
-    }
+    res += renderAttr(key, attrs[key])
   }
   return res
+}
+
+export function renderAttr (key: string, value: string): string {
+  if (isBooleanAttr(key)) {
+    if (!isFalsyAttrValue(value)) {
+      return ` ${key}="${key}"`
+    }
+  } else if (isEnumeratedAttr(key)) {
+    return ` ${key}="${isFalsyAttrValue(value) || value === 'false' ? 'false' : 'true'}"`
+  } else if (!isFalsyAttrValue(value)) {
+    return ` ${key}="${value}"`
+  }
+  return ''
 }

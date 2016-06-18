@@ -22,11 +22,11 @@ var banner =
 // Update main file
 var main = fs
   .readFileSync('src/core/index.js', 'utf-8')
-  .replace(/Vue\.version = '[\d\.]+'/, "Vue.version = '" + version + "'")
+  .replace(/Vue\.version = '[^']+'/, "Vue.version = '" + version + "'")
 fs.writeFileSync('src/core/index.js', main)
 
 var builds = [
-  // Runtime only, CommonJS build. Used by bundlers e.g. Webpack & Browserify
+  // Runtime only (CommonJS). Used by bundlers e.g. Webpack & Browserify
   {
     entry: 'src/entries/web-runtime.js',
     format: 'cjs',
@@ -61,19 +61,19 @@ var builds = [
       entities: './entity-decoder'
     }
   },
-  // Web compiler CommonJS build, for npm distribution.
+  // Web compiler (CommonJS).
   {
     entry: 'src/entries/web-compiler.js',
     format: 'cjs',
-    external: ['entities'],
-    out: 'dist/compiler.common.js'
+    external: ['entities', 'de-indent', 'source-map'],
+    out: 'packages/vue-template-compiler/index.js'
   },
-  // Web server renderer
+  // Web server renderer (CommonJS).
   {
     entry: 'src/entries/web-server-renderer.js',
     format: 'cjs',
-    external: ['stream'],
-    out: 'dist/server-renderer.js'
+    external: ['stream', 'entities'],
+    out: 'packages/vue-server-renderer/index.js'
   }
 ]
 
@@ -105,7 +105,8 @@ function buildEntry (opts) {
   var plugins = [babel()]
   if (opts.env) {
     plugins.push(replace({
-      'process.env.NODE_ENV': JSON.stringify(opts.env)
+      'process.env.NODE_ENV': JSON.stringify(opts.env),
+      'process.env.VUE_ENV': JSON.stringify('client')
     }))
   }
   var alias = baseAlias
@@ -127,6 +128,7 @@ function buildEntry (opts) {
       var minified = (opts.banner ? banner + '\n' : '') + uglify.minify(code, {
         fromString: true,
         output: {
+          screw_ie8: true,
           ascii_only: true
         },
         compress: {
