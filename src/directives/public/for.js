@@ -332,7 +332,15 @@ const vFor = {
       })
       setTimeout(op, staggerAmount)
     } else {
-      frag.before(prevEl.nextSibling)
+      var target = prevEl.nextSibling
+      /* istanbul ignore if */
+      if (!target) {
+        // reset end anchor position in case the position was messed up
+        // by an external drag-n-drop library.
+        after(this.end, prevEl)
+        target = this.end
+      }
+      frag.before(target)
     }
   },
 
@@ -419,8 +427,13 @@ const vFor = {
           process.env.NODE_ENV !== 'production' &&
           this.warnDuplicate(value)
         }
-      } else {
+      } else if (Object.isExtensible(value)) {
         def(value, id, frag)
+      } else if (process.env.NODE_ENV !== 'production') {
+        warn(
+          'Frozen v-for objects cannot be automatically tracked, make sure to ' +
+          'provide a track-by key.'
+        )
       }
     }
     frag.raw = value
@@ -511,7 +524,7 @@ const vFor = {
    * the filters. This is passed to and called by the watcher.
    *
    * It is necessary for this to be called during the
-   * wathcer's dependency collection phase because we want
+   * watcher's dependency collection phase because we want
    * the v-for to update when the source Object is mutated.
    */
 

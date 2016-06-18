@@ -219,6 +219,18 @@ var testCases = [
     paths: []
   },
   {
+    exp: 'null',
+    scope: {},
+    expected: null,
+    paths: []
+  },
+  {
+    exp: 'undefined',
+    scope: { undefined: 1 },
+    expected: undefined,
+    paths: []
+  },
+  {
     // Date global
     exp: 'Date.now() > new Date("2000-01-01")',
     scope: {},

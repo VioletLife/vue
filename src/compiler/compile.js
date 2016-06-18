@@ -5,6 +5,7 @@ import { parseText, tokensToExp } from '../parsers/text'
 import { parseDirective } from '../parsers/directive'
 import { parseTemplate } from '../parsers/template'
 import {
+  _toString,
   resolveAsset,
   toArray,
   warn,
@@ -53,7 +54,7 @@ export function compile (el, options, partial) {
   // link function for the childNodes
   var childLinkFn =
     !(nodeLinkFn && nodeLinkFn.terminal) &&
-    el.tagName !== 'SCRIPT' &&
+    !isScript(el) &&
     el.hasChildNodes()
       ? compileNodeList(el.childNodes, options)
       : null
@@ -284,7 +285,7 @@ export function compileRoot (el, options, contextOptions) {
 
 function compileNode (node, options) {
   var type = node.nodeType
-  if (type === 1 && node.tagName !== 'SCRIPT') {
+  if (type === 1 && !isScript(node)) {
     return compileElement(node, options)
   } else if (type === 3 && node.data.trim()) {
     return compileTextNode(node, options)
@@ -446,7 +447,7 @@ function makeTextNodeLinkFn (tokens, frag) {
           if (token.html) {
             replace(node, parseTemplate(value, true))
           } else {
-            node.data = value
+            node.data = _toString(value)
           }
         } else {
           vm._bindDir(token.descriptor, node, host, scope)
@@ -818,4 +819,11 @@ function hasOneTime (tokens) {
   while (i--) {
     if (tokens[i].oneTime) return true
   }
+}
+
+function isScript (el) {
+  return el.tagName === 'SCRIPT' && (
+    !el.hasAttribute('type') ||
+    el.getAttribute('type') === 'text/javascript'
+  )
 }
